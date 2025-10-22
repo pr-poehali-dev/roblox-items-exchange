@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import Icon from '@/components/ui/icon';
 import { useToast } from '@/hooks/use-toast';
 
@@ -28,10 +30,36 @@ interface Review {
   date: string;
 }
 
+interface Message {
+  id: number;
+  sender: string;
+  text: string;
+  time: string;
+  isOwn: boolean;
+}
+
+interface User {
+  username: string;
+  rating: number;
+  deals: number;
+}
+
 const Index = () => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('listings');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [showAuthDialog, setShowAuthDialog] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [showChat, setShowChat] = useState(false);
+  const [selectedSeller, setSelectedSeller] = useState<string>('');
+  const [chatMessage, setChatMessage] = useState('');
+  const [authForm, setAuthForm] = useState({
+    username: '',
+    password: '',
+    confirmPassword: ''
+  });
   const [newListing, setNewListing] = useState({
     title: '',
     description: '',
@@ -48,24 +76,16 @@ const Index = () => {
       imageUrl: '/placeholder.svg',
       seller: 'TraderPro',
       rating: 4.8
-    },
+    }
+  ]);
+
+  const [messages, setMessages] = useState<Message[]>([
     {
-      id: 2,
-      title: 'Valkyrie Helm',
-      description: 'Легендарный шлем валькирии',
-      price: '35,000 R$',
-      imageUrl: '/placeholder.svg',
-      seller: 'RoItems',
-      rating: 4.9
-    },
-    {
-      id: 3,
-      title: 'Sparkle Time Fedora',
-      description: 'Лимитированная федора с эффектами',
-      price: '120,000 R$',
-      imageUrl: '/placeholder.svg',
-      seller: 'TopSeller',
-      rating: 5.0
+      id: 1,
+      sender: 'TraderPro',
+      text: 'Здравствуйте! Интересует эта вещь?',
+      time: '14:20',
+      isOwn: false
     }
   ]);
 
@@ -86,13 +106,38 @@ const Index = () => {
     }
   ]);
 
+  const handleAuth = () => {
+    if (authMode === 'register') {
+      if (!authForm.username || !authForm.password || !authForm.confirmPassword) {
+        toast({ title: "Ошибка", description: "Заполните все поля", variant: "destructive" });
+        return;
+      }
+      if (authForm.password !== authForm.confirmPassword) {
+        toast({ title: "Ошибка", description: "Пароли не совпадают", variant: "destructive" });
+        return;
+      }
+    } else {
+      if (!authForm.username || !authForm.password) {
+        toast({ title: "Ошибка", description: "Заполните все поля", variant: "destructive" });
+        return;
+      }
+    }
+
+    setCurrentUser({ username: authForm.username, rating: 0, deals: 0 });
+    setIsAuthenticated(true);
+    setShowAuthDialog(false);
+    setAuthForm({ username: '', password: '', confirmPassword: '' });
+    toast({ title: "Успех!", description: authMode === 'register' ? "Регистрация завершена" : "Вы вошли в систему" });
+  };
+
   const handleCreateListing = () => {
+    if (!isAuthenticated) {
+      toast({ title: "Ошибка", description: "Войдите в систему", variant: "destructive" });
+      setShowAuthDialog(true);
+      return;
+    }
     if (!newListing.title || !newListing.price) {
-      toast({
-        title: "Ошибка",
-        description: "Заполните название и цену",
-        variant: "destructive"
-      });
+      toast({ title: "Ошибка", description: "Заполните название и цену", variant: "destructive" });
       return;
     }
 
@@ -100,18 +145,39 @@ const Index = () => {
       id: listings.length + 1,
       ...newListing,
       imageUrl: newListing.imageUrl || '/placeholder.svg',
-      seller: 'Вы',
+      seller: currentUser?.username || 'Вы',
       rating: 0
     };
 
     setListings([listing, ...listings]);
     setNewListing({ title: '', description: '', price: '', imageUrl: '' });
     setActiveTab('listings');
+    toast({ title: "Готово!", description: "Объявление создано" });
+  };
+
+  const handleOpenChat = (seller: string) => {
+    if (!isAuthenticated) {
+      toast({ title: "Ошибка", description: "Войдите для связи с продавцом", variant: "destructive" });
+      setShowAuthDialog(true);
+      return;
+    }
+    setSelectedSeller(seller);
+    setShowChat(true);
+  };
+
+  const handleSendMessage = () => {
+    if (!chatMessage.trim()) return;
     
-    toast({
-      title: "Готово!",
-      description: "Объявление создано успешно"
-    });
+    const newMessage: Message = {
+      id: messages.length + 1,
+      sender: currentUser?.username || 'Вы',
+      text: chatMessage,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isOwn: true
+    };
+    
+    setMessages([...messages, newMessage]);
+    setChatMessage('');
   };
 
   const filteredListings = listings.filter(listing =>
@@ -150,10 +216,27 @@ const Index = () => {
               </Button>
             </nav>
 
-            <Button className="bg-primary hover:bg-primary/90">
-              <Icon name="LogIn" size={18} className="mr-2" />
-              Войти
-            </Button>
+            {isAuthenticated ? (
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium hidden md:inline">{currentUser?.username}</span>
+                <Button variant="outline" onClick={() => {
+                  setIsAuthenticated(false);
+                  setCurrentUser(null);
+                  toast({ title: "Выход", description: "Вы вышли из системы" });
+                }}>
+                  <Icon name="LogOut" size={18} className="mr-2" />
+                  Выйти
+                </Button>
+              </div>
+            ) : (
+              <Button className="bg-primary hover:bg-primary/90" onClick={() => {
+                setAuthMode('login');
+                setShowAuthDialog(true);
+              }}>
+                <Icon name="LogIn" size={18} className="mr-2" />
+                Войти
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -229,7 +312,10 @@ const Index = () => {
                       </div>
                     </CardContent>
                     <CardFooter className="p-4 pt-0">
-                      <Button className="w-full bg-primary hover:bg-primary/90">
+                      <Button 
+                        className="w-full bg-primary hover:bg-primary/90"
+                        onClick={() => handleOpenChat(listing.seller)}
+                      >
                         <Icon name="MessageCircle" size={16} className="mr-2" />
                         Связаться
                       </Button>
@@ -445,6 +531,133 @@ const Index = () => {
           </div>
         </div>
       </footer>
+
+      <Dialog open={showAuthDialog} onOpenChange={setShowAuthDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{authMode === 'login' ? 'Вход' : 'Регистрация'}</DialogTitle>
+            <DialogDescription>
+              {authMode === 'login' 
+                ? 'Введите данные для входа в систему' 
+                : 'Создайте аккаунт для размещения объявлений'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="auth-username">Имя пользователя</Label>
+              <Input
+                id="auth-username"
+                placeholder="TraderPro"
+                value={authForm.username}
+                onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="auth-password">Пароль</Label>
+              <Input
+                id="auth-password"
+                type="password"
+                placeholder="••••••••"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              />
+            </div>
+            {authMode === 'register' && (
+              <div className="space-y-2">
+                <Label htmlFor="auth-confirm">Подтвердите пароль</Label>
+                <Input
+                  id="auth-confirm"
+                  type="password"
+                  placeholder="••••••••"
+                  value={authForm.confirmPassword}
+                  onChange={(e) => setAuthForm({ ...authForm, confirmPassword: e.target.value })}
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button 
+              variant="ghost" 
+              onClick={() => {
+                setAuthMode(authMode === 'login' ? 'register' : 'login');
+              }}
+              className="w-full sm:w-auto"
+            >
+              {authMode === 'login' ? 'Нет аккаунта? Регистрация' : 'Уже есть аккаунт? Войти'}
+            </Button>
+            <Button onClick={handleAuth} className="w-full sm:w-auto bg-primary">
+              {authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showChat} onOpenChange={setShowChat}>
+        <DialogContent className="max-w-2xl h-[600px] flex flex-col p-0">
+          <DialogHeader className="p-6 pb-4 border-b">
+            <DialogTitle className="flex items-center gap-3">
+              <Avatar className="w-10 h-10">
+                <AvatarFallback>{selectedSeller[0]}</AvatarFallback>
+              </Avatar>
+              <div>
+                <div className="font-semibold">{selectedSeller}</div>
+                <div className="text-xs text-muted-foreground font-normal">В сети</div>
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          
+          <ScrollArea className="flex-1 p-6">
+            <div className="space-y-4">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex gap-3 ${message.isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+                >
+                  <Avatar className="w-8 h-8">
+                    <AvatarFallback>{message.sender[0]}</AvatarFallback>
+                  </Avatar>
+                  <div className={`flex flex-col gap-1 max-w-[70%]`}>
+                    <div
+                      className={`rounded-lg px-4 py-2 ${
+                        message.isOwn
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted'
+                      }`}
+                    >
+                      <p className="text-sm">{message.text}</p>
+                    </div>
+                    <span className="text-xs text-muted-foreground px-1">
+                      {message.time}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+
+          <div className="p-4 border-t">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Напишите сообщение..."
+                value={chatMessage}
+                onChange={(e) => setChatMessage(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+              />
+              <Button onClick={handleSendMessage} className="bg-primary">
+                <Icon name="Send" size={18} />
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              ⚠️ Сделки происходят между пользователями. Будьте осторожны!
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
