@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import Icon from '@/components/ui/icon';
 import { useToast } from '@/hooks/use-toast';
 
@@ -18,15 +19,6 @@ interface Listing {
   description: string;
   imageUrl: string;
   seller: string;
-  rating: number;
-}
-
-interface Review {
-  id: number;
-  author: string;
-  rating: number;
-  text: string;
-  date: string;
 }
 
 interface Message {
@@ -35,12 +27,13 @@ interface Message {
   text: string;
   time: string;
   isOwn: boolean;
-  replyTo?: Message;
+  replyTo?: { id: number; text: string; sender: string };
 }
 
 interface Chat {
   id: string;
   participant: string;
+  participantAvatar?: string;
   lastMessage: string;
   lastTime: string;
   unread: number;
@@ -50,11 +43,20 @@ interface Chat {
 
 interface User {
   username: string;
+  avatar?: string;
   rating: number;
   deals: number;
   reports: number;
   isBlocked: boolean;
 }
+
+interface StoredData {
+  users: Record<string, { password: string; user: User }>;
+  listings: Listing[];
+  chats: Record<string, Chat>;
+}
+
+const NOTIFICATION_SOUND = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUKnl8bllHgU2';
 
 const Index = () => {
   const { toast } = useToast();
@@ -62,61 +64,86 @@ const Index = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
+  const [showReportDialog, setShowReportDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteListingId, setDeleteListingId] = useState<number | null>(null);
+  const [reportTarget, setReportTarget] = useState<string>('');
+  const [reportReason, setReportReason] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showChat, setShowChat] = useState(false);
-  const [selectedSeller, setSelectedSeller] = useState<string>('');
+  const [activeChatId, setActiveChatId] = useState<string>('');
   const [chatMessage, setChatMessage] = useState('');
+  const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
+  const [profileAvatar, setProfileAvatar] = useState('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  
   const [authForm, setAuthForm] = useState({
     username: '',
     password: '',
     confirmPassword: ''
   });
+  
   const [newListing, setNewListing] = useState({
     title: '',
     description: '',
-    price: '',
     imageUrl: ''
   });
 
-  const [listings, setListings] = useState<Listing[]>([
-    {
-      id: 1,
-      title: 'Dominus Empyreus',
-      description: 'Редкая шапка, отличное состояние',
-      price: '50,000 R$',
-      imageUrl: '/placeholder.svg',
-      seller: 'TraderPro',
-      rating: 4.8
-    }
-  ]);
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [chats, setChats] = useState<Record<string, Chat>>({});
+  const [users, setUsers] = useState<Record<string, { password: string; user: User }>>({});
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      sender: 'TraderPro',
-      text: 'Здравствуйте! Интересует эта вещь?',
-      time: '14:20',
-      isOwn: false
+  useEffect(() => {
+    const audio = new Audio(NOTIFICATION_SOUND);
+    audioRef.current = audio;
+    
+    const stored = localStorage.getItem('rotrade_data');
+    if (stored) {
+      const data: StoredData = JSON.parse(stored);
+      setUsers(data.users || {});
+      setListings(data.listings || []);
+      setChats(data.chats || {});
+    } else {
+      const defaultUsers = {
+        'TraderPro': {
+          password: 'demo123',
+          user: { username: 'TraderPro', rating: 4.8, deals: 24, reports: 0, isBlocked: false }
+        }
+      };
+      const defaultListings = [{
+        id: 1,
+        title: 'Dominus Empyreus',
+        description: 'Редкая шапка, отличное состояние. Обсудим цену в личных сообщениях',
+        imageUrl: '/placeholder.svg',
+        seller: 'TraderPro'
+      }];
+      setUsers(defaultUsers);
+      setListings(defaultListings);
+      saveToStorage({ users: defaultUsers, listings: defaultListings, chats: {} });
     }
-  ]);
 
-  const [reviews] = useState<Review[]>([
-    {
-      id: 1,
-      author: 'Player123',
-      rating: 5,
-      text: 'Отличный продавец, всё быстро и честно!',
-      date: '2 дня назад'
-    },
-    {
-      id: 2,
-      author: 'RoFan',
-      rating: 4,
-      text: 'Хорошая сделка, рекомендую',
-      date: '5 дней назад'
+    const currentUserData = localStorage.getItem('rotrade_current_user');
+    if (currentUserData) {
+      const userData = JSON.parse(currentUserData);
+      setCurrentUser(userData);
+      setIsAuthenticated(true);
     }
-  ]);
+  }, []);
+
+  const saveToStorage = (data: Partial<StoredData>) => {
+    const stored = localStorage.getItem('rotrade_data');
+    const current: StoredData = stored ? JSON.parse(stored) : { users: {}, listings: [], chats: {} };
+    const updated = { ...current, ...data };
+    localStorage.setItem('rotrade_data', JSON.stringify(updated));
+  };
+
+  const playNotification = () => {
+    if (audioRef.current) {
+      audioRef.current.play().catch(() => {});
+    }
+  };
 
   const handleAuth = () => {
     if (authMode === 'register') {
@@ -128,68 +155,244 @@ const Index = () => {
         toast({ title: "Ошибка", description: "Пароли не совпадают", variant: "destructive" });
         return;
       }
+      if (users[authForm.username]) {
+        toast({ title: "Ошибка", description: "Это имя уже занято", variant: "destructive" });
+        return;
+      }
+
+      const newUser: User = {
+        username: authForm.username,
+        rating: 0,
+        deals: 0,
+        reports: 0,
+        isBlocked: false
+      };
+      
+      const updatedUsers = {
+        ...users,
+        [authForm.username]: { password: authForm.password, user: newUser }
+      };
+      
+      setUsers(updatedUsers);
+      setCurrentUser(newUser);
+      setIsAuthenticated(true);
+      saveToStorage({ users: updatedUsers });
+      localStorage.setItem('rotrade_current_user', JSON.stringify(newUser));
+      
+      toast({ title: "Успех!", description: "Регистрация завершена" });
     } else {
       if (!authForm.username || !authForm.password) {
         toast({ title: "Ошибка", description: "Заполните все поля", variant: "destructive" });
         return;
       }
-    }
+      
+      const userData = users[authForm.username];
+      if (!userData || userData.password !== authForm.password) {
+        toast({ title: "Ошибка", description: "Неверный логин или пароль", variant: "destructive" });
+        return;
+      }
+      
+      if (userData.user.isBlocked) {
+        toast({ title: "Ошибка", description: "Ваш профиль заблокирован", variant: "destructive" });
+        return;
+      }
 
-    setCurrentUser({ username: authForm.username, rating: 0, deals: 0 });
-    setIsAuthenticated(true);
+      setCurrentUser(userData.user);
+      setIsAuthenticated(true);
+      localStorage.setItem('rotrade_current_user', JSON.stringify(userData.user));
+      toast({ title: "Успех!", description: "Вы вошли в систему" });
+    }
+    
     setShowAuthDialog(false);
     setAuthForm({ username: '', password: '', confirmPassword: '' });
-    toast({ title: "Успех!", description: authMode === 'register' ? "Регистрация завершена" : "Вы вошли в систему" });
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    localStorage.removeItem('rotrade_current_user');
+    toast({ title: "Выход", description: "Вы вышли из системы" });
   };
 
   const handleCreateListing = () => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !currentUser) {
       toast({ title: "Ошибка", description: "Войдите в систему", variant: "destructive" });
       setShowAuthDialog(true);
       return;
     }
-    if (!newListing.title || !newListing.price) {
-      toast({ title: "Ошибка", description: "Заполните название и цену", variant: "destructive" });
+    if (!newListing.title || !newListing.description) {
+      toast({ title: "Ошибка", description: "Заполните название и описание", variant: "destructive" });
       return;
     }
 
     const listing: Listing = {
-      id: listings.length + 1,
-      ...newListing,
+      id: Date.now(),
+      title: newListing.title,
+      description: newListing.description,
       imageUrl: newListing.imageUrl || '/placeholder.svg',
-      seller: currentUser?.username || 'Вы',
-      rating: 0
+      seller: currentUser.username
     };
 
-    setListings([listing, ...listings]);
-    setNewListing({ title: '', description: '', price: '', imageUrl: '' });
+    const updatedListings = [listing, ...listings];
+    setListings(updatedListings);
+    saveToStorage({ listings: updatedListings });
+    setNewListing({ title: '', description: '', imageUrl: '' });
     setActiveTab('listings');
     toast({ title: "Готово!", description: "Объявление создано" });
   };
 
-  const handleOpenChat = (seller: string) => {
-    if (!isAuthenticated) {
+  const handleDeleteListing = (id: number) => {
+    const updatedListings = listings.filter(l => l.id !== id);
+    setListings(updatedListings);
+    saveToStorage({ listings: updatedListings });
+    toast({ title: "Удалено", description: "Объявление удалено" });
+    setShowDeleteDialog(false);
+  };
+
+  const handleOpenChat = (participant: string) => {
+    if (!isAuthenticated || !currentUser) {
       toast({ title: "Ошибка", description: "Войдите для связи с продавцом", variant: "destructive" });
       setShowAuthDialog(true);
       return;
     }
-    setSelectedSeller(seller);
+
+    const chatId = [currentUser.username, participant].sort().join('_');
+    
+    if (!chats[chatId]) {
+      const newChat: Chat = {
+        id: chatId,
+        participant: participant,
+        participantAvatar: users[participant]?.user.avatar,
+        lastMessage: 'Начните диалог',
+        lastTime: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        unread: 0,
+        messages: [],
+        blocked: false
+      };
+      const updatedChats = { ...chats, [chatId]: newChat };
+      setChats(updatedChats);
+      saveToStorage({ chats: updatedChats });
+    }
+
+    setActiveChatId(chatId);
     setShowChat(true);
+    
+    const updatedChats = { ...chats };
+    if (updatedChats[chatId]) {
+      updatedChats[chatId].unread = 0;
+      setChats(updatedChats);
+      saveToStorage({ chats: updatedChats });
+    }
   };
 
   const handleSendMessage = () => {
-    if (!chatMessage.trim()) return;
+    if (!chatMessage.trim() || !currentUser) return;
     
+    const chat = chats[activeChatId];
+    if (!chat || chat.blocked) {
+      toast({ title: "Ошибка", description: "Чат заблокирован", variant: "destructive" });
+      return;
+    }
+
     const newMessage: Message = {
-      id: messages.length + 1,
-      sender: currentUser?.username || 'Вы',
+      id: Date.now(),
+      sender: currentUser.username,
       text: chatMessage,
       time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-      isOwn: true
+      isOwn: true,
+      replyTo: replyToMessage ? {
+        id: replyToMessage.id,
+        text: replyToMessage.text,
+        sender: replyToMessage.sender
+      } : undefined
     };
+
+    const updatedChat = {
+      ...chat,
+      messages: [...chat.messages, newMessage],
+      lastMessage: chatMessage,
+      lastTime: newMessage.time
+    };
+
+    const updatedChats = { ...chats, [activeChatId]: updatedChat };
+    setChats(updatedChats);
+    saveToStorage({ chats: updatedChats });
     
-    setMessages([...messages, newMessage]);
     setChatMessage('');
+    setReplyToMessage(null);
+  };
+
+  const handleBlockChat = () => {
+    if (!activeChatId) return;
+    
+    const updatedChat = { ...chats[activeChatId], blocked: !chats[activeChatId].blocked };
+    const updatedChats = { ...chats, [activeChatId]: updatedChat };
+    setChats(updatedChats);
+    saveToStorage({ chats: updatedChats });
+    
+    toast({
+      title: updatedChat.blocked ? "Заблокировано" : "Разблокировано",
+      description: updatedChat.blocked ? "Пользователь заблокирован" : "Пользователь разблокирован"
+    });
+  };
+
+  const handleReport = () => {
+    if (!reportReason.trim()) {
+      toast({ title: "Ошибка", description: "Укажите причину жалобы", variant: "destructive" });
+      return;
+    }
+
+    const targetUserData = users[reportTarget];
+    if (!targetUserData) return;
+
+    const updatedUser = {
+      ...targetUserData.user,
+      reports: targetUserData.user.reports + 1,
+      isBlocked: targetUserData.user.reports + 1 >= 5
+    };
+
+    const updatedUsers = {
+      ...users,
+      [reportTarget]: { ...targetUserData, user: updatedUser }
+    };
+
+    setUsers(updatedUsers);
+    saveToStorage({ users: updatedUsers });
+
+    if (updatedUser.isBlocked) {
+      toast({
+        title: "Профиль заблокирован",
+        description: "Пользователь заблокирован за множественные нарушения",
+        variant: "destructive"
+      });
+    } else {
+      toast({ title: "Отправлено", description: "Жалоба отправлена администрации" });
+    }
+
+    setShowReportDialog(false);
+    setReportReason('');
+  };
+
+  const handleUpdateProfile = () => {
+    if (!currentUser) return;
+
+    const updatedUser = { ...currentUser, avatar: profileAvatar };
+    setCurrentUser(updatedUser);
+
+    const updatedUsers = {
+      ...users,
+      [currentUser.username]: {
+        ...users[currentUser.username],
+        user: updatedUser
+      }
+    };
+
+    setUsers(updatedUsers);
+    saveToStorage({ users: updatedUsers });
+    localStorage.setItem('rotrade_current_user', JSON.stringify(updatedUser));
+
+    toast({ title: "Сохранено", description: "Профиль обновлён" });
+    setShowProfileSettings(false);
   };
 
   const filteredListings = listings.filter(listing =>
@@ -197,55 +400,66 @@ const Index = () => {
     listing.description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const userChats = Object.values(chats).filter(chat =>
+    chat.id.includes(currentUser?.username || '')
+  );
+
+  const totalUnread = userChats.reduce((sum, chat) => sum + chat.unread, 0);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b bg-card shadow-sm">
-        <div className="container mx-auto px-4 py-4">
+        <div className="container mx-auto px-4 py-3 md:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-                <Icon name="Package" className="text-primary-foreground" size={24} />
+            <div className="flex items-center gap-2 md:gap-3">
+              <div className="w-8 h-8 md:w-10 md:h-10 bg-primary rounded-lg flex items-center justify-center">
+                <Icon name="Package" className="text-primary-foreground" size={20} />
               </div>
-              <h1 className="text-2xl font-bold text-foreground">RoTrade</h1>
+              <h1 className="text-xl md:text-2xl font-bold text-foreground">RoTrade</h1>
             </div>
             
-            <nav className="hidden md:flex items-center gap-6">
-              <Button variant="ghost" onClick={() => setActiveTab('listings')}>
+            <nav className="hidden md:flex items-center gap-4">
+              <Button variant="ghost" size="sm" onClick={() => setActiveTab('listings')}>
                 <Icon name="Store" size={18} className="mr-2" />
                 Объявления
               </Button>
-              <Button variant="ghost" onClick={() => setActiveTab('create')}>
+              <Button variant="ghost" size="sm" onClick={() => setActiveTab('chats')}>
+                <Icon name="MessageCircle" size={18} className="mr-2" />
+                Чаты
+                {totalUnread > 0 && (
+                  <Badge variant="destructive" className="ml-2 px-1.5 py-0 text-xs">{totalUnread}</Badge>
+                )}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setActiveTab('create')}>
                 <Icon name="Plus" size={18} className="mr-2" />
                 Создать
               </Button>
-              <Button variant="ghost" onClick={() => setActiveTab('profile')}>
+              <Button variant="ghost" size="sm" onClick={() => setActiveTab('profile')}>
                 <Icon name="User" size={18} className="mr-2" />
                 Профиль
-              </Button>
-              <Button variant="ghost" onClick={() => setActiveTab('reviews')}>
-                <Icon name="Star" size={18} className="mr-2" />
-                Отзывы
               </Button>
             </nav>
 
             {isAuthenticated ? (
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium hidden md:inline">{currentUser?.username}</span>
-                <Button variant="outline" onClick={() => {
-                  setIsAuthenticated(false);
-                  setCurrentUser(null);
-                  toast({ title: "Выход", description: "Вы вышли из системы" });
-                }}>
-                  <Icon name="LogOut" size={18} className="mr-2" />
+              <div className="flex items-center gap-2">
+                <Avatar className="w-8 h-8 md:w-9 md:h-9 cursor-pointer" onClick={() => setShowProfileSettings(true)}>
+                  {currentUser?.avatar ? (
+                    <AvatarImage src={currentUser.avatar} />
+                  ) : (
+                    <AvatarFallback>{currentUser?.username[0]}</AvatarFallback>
+                  )}
+                </Avatar>
+                <Button variant="outline" size="sm" onClick={handleLogout} className="hidden md:flex">
+                  <Icon name="LogOut" size={16} className="mr-2" />
                   Выйти
                 </Button>
               </div>
             ) : (
-              <Button className="bg-primary hover:bg-primary/90" onClick={() => {
+              <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={() => {
                 setAuthMode('login');
                 setShowAuthDialog(true);
               }}>
-                <Icon name="LogIn" size={18} className="mr-2" />
+                <Icon name="LogIn" size={16} className="mr-2" />
                 Войти
               </Button>
             )}
@@ -253,11 +467,19 @@ const Index = () => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-4 md:py-8">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-4 md:hidden mb-6">
             <TabsTrigger value="listings">
               <Icon name="Store" size={16} />
+            </TabsTrigger>
+            <TabsTrigger value="chats" className="relative">
+              <Icon name="MessageCircle" size={16} />
+              {totalUnread > 0 && (
+                <Badge variant="destructive" className="absolute -top-1 -right-1 w-4 h-4 p-0 flex items-center justify-center text-[10px]">
+                  {totalUnread}
+                </Badge>
+              )}
             </TabsTrigger>
             <TabsTrigger value="create">
               <Icon name="Plus" size={16} />
@@ -265,23 +487,20 @@ const Index = () => {
             <TabsTrigger value="profile">
               <Icon name="User" size={16} />
             </TabsTrigger>
-            <TabsTrigger value="reviews">
-              <Icon name="Star" size={16} />
-            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="listings" className="space-y-6">
             <div className="space-y-4">
               <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
                 <div>
-                  <h2 className="text-3xl font-bold">Объявления</h2>
-                  <p className="text-muted-foreground">Найдите лучшие предложения по вещам Roblox</p>
+                  <h2 className="text-2xl md:text-3xl font-bold">Объявления</h2>
+                  <p className="text-sm md:text-base text-muted-foreground">Найдите лучшие предложения по вещам Roblox</p>
                 </div>
                 <div className="w-full md:w-96">
                   <div className="relative">
                     <Icon name="Search" className="absolute left-3 top-3 text-muted-foreground" size={18} />
                     <Input
-                      placeholder="Поиск по названию..."
+                      placeholder="Поиск..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="pl-10"
@@ -290,7 +509,7 @@ const Index = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
                 {filteredListings.map((listing) => (
                   <Card key={listing.id} className="hover:shadow-lg transition-shadow">
                     <CardHeader className="p-0">
@@ -304,46 +523,127 @@ const Index = () => {
                     </CardHeader>
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between mb-2">
-                        <CardTitle className="text-lg">{listing.title}</CardTitle>
-                        {listing.rating > 0 && (
-                          <Badge variant="secondary" className="flex items-center gap-1">
-                            <Icon name="Star" size={12} />
-                            {listing.rating}
-                          </Badge>
-                        )}
+                        <CardTitle className="text-base md:text-lg">{listing.title}</CardTitle>
                       </div>
-                      <CardDescription className="line-clamp-2 mb-3">
+                      <CardDescription className="line-clamp-2 mb-3 text-sm">
                         {listing.description}
                       </CardDescription>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xl font-bold text-primary">{listing.price}</span>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Icon name="User" size={14} />
-                          {listing.seller}
-                        </div>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Icon name="User" size={14} />
+                        {listing.seller}
                       </div>
                     </CardContent>
-                    <CardFooter className="p-4 pt-0">
+                    <CardFooter className="p-4 pt-0 flex gap-2">
                       <Button 
-                        className="w-full bg-primary hover:bg-primary/90"
+                        className="flex-1 bg-primary hover:bg-primary/90"
+                        size="sm"
                         onClick={() => handleOpenChat(listing.seller)}
                       >
                         <Icon name="MessageCircle" size={16} className="mr-2" />
                         Связаться
                       </Button>
+                      {currentUser?.username === listing.seller && (
+                        <Button 
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => {
+                            setDeleteListingId(listing.id);
+                            setShowDeleteDialog(true);
+                          }}
+                        >
+                          <Icon name="Trash2" size={16} />
+                        </Button>
+                      )}
                     </CardFooter>
                   </Card>
                 ))}
               </div>
+
+              {filteredListings.length === 0 && (
+                <div className="text-center py-12">
+                  <Icon name="Package" size={48} className="mx-auto text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Объявления не найдены</p>
+                </div>
+              )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="chats" className="space-y-4">
+            <div>
+              <h2 className="text-2xl md:text-3xl font-bold mb-2">Чаты</h2>
+              <p className="text-sm md:text-base text-muted-foreground mb-4">Ваши диалоги с продавцами и покупателями</p>
+            </div>
+
+            {!isAuthenticated ? (
+              <Card>
+                <CardContent className="p-12 text-center">
+                  <Icon name="MessageCircle" size={48} className="mx-auto text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground mb-4">Войдите чтобы видеть чаты</p>
+                  <Button onClick={() => {
+                    setAuthMode('login');
+                    setShowAuthDialog(true);
+                  }}>
+                    Войти
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : userChats.length === 0 ? (
+              <Card>
+                <CardContent className="p-12 text-center">
+                  <Icon name="MessageCircle" size={48} className="mx-auto text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">У вас пока нет чатов</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-3">
+                {userChats.map((chat) => (
+                  <Card
+                    key={chat.id}
+                    className="cursor-pointer hover:bg-accent/50 transition-colors"
+                    onClick={() => {
+                      setActiveChatId(chat.id);
+                      setShowChat(true);
+                      const updatedChats = { ...chats };
+                      updatedChats[chat.id].unread = 0;
+                      setChats(updatedChats);
+                      saveToStorage({ chats: updatedChats });
+                    }}
+                  >
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="w-10 h-10 md:w-12 md:h-12">
+                          {chat.participantAvatar ? (
+                            <AvatarImage src={chat.participantAvatar} />
+                          ) : (
+                            <AvatarFallback>{chat.participant[0]}</AvatarFallback>
+                          )}
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <h3 className="font-semibold truncate">{chat.participant}</h3>
+                            <span className="text-xs text-muted-foreground">{chat.lastTime}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground truncate flex-1">{chat.lastMessage}</p>
+                            {chat.unread > 0 && (
+                              <Badge variant="default" className="ml-2">{chat.unread}</Badge>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="create" className="space-y-6">
             <div className="max-w-2xl mx-auto">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-2xl">Создать объявление</CardTitle>
-                  <CardDescription>
+                  <CardTitle className="text-xl md:text-2xl">Создать объявление</CardTitle>
+                  <CardDescription className="text-sm">
                     Заполните информацию о вашем предложении
                   </CardDescription>
                 </CardHeader>
@@ -359,24 +659,17 @@ const Index = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="description">Описание</Label>
+                    <Label htmlFor="description">Описание *</Label>
                     <Textarea
                       id="description"
-                      placeholder="Опишите предмет, его состояние и особенности..."
+                      placeholder="Опишите предмет, его состояние. Цену обсудим в чате..."
                       rows={4}
                       value={newListing.description}
                       onChange={(e) => setNewListing({ ...newListing, description: e.target.value })}
                     />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="price">Цена *</Label>
-                    <Input
-                      id="price"
-                      placeholder="50,000 R$"
-                      value={newListing.price}
-                      onChange={(e) => setNewListing({ ...newListing, price: e.target.value })}
-                    />
+                    <p className="text-xs text-muted-foreground">
+                      💡 Не указывайте цену в объявлении - обсудите её с покупателем в личных сообщениях
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -404,112 +697,78 @@ const Index = () => {
 
           <TabsContent value="profile" className="space-y-6">
             <div className="max-w-2xl mx-auto">
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-4">
-                    <Avatar className="w-20 h-20">
-                      <AvatarImage src="/placeholder.svg" />
-                      <AvatarFallback>TP</AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <CardTitle className="text-2xl">TraderPro</CardTitle>
-                      <CardDescription>Участник с октября 2024</CardDescription>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                          <Icon name="Star" size={12} />
-                          4.8
-                        </Badge>
-                        <Badge>Проверенный продавец</Badge>
-                      </div>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="grid grid-cols-3 gap-4 text-center">
-                    <div className="space-y-1">
-                      <div className="text-2xl font-bold text-primary">24</div>
-                      <div className="text-sm text-muted-foreground">Сделок</div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-2xl font-bold text-primary">18</div>
-                      <div className="text-sm text-muted-foreground">Отзывов</div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-2xl font-bold text-primary">4.8</div>
-                      <div className="text-sm text-muted-foreground">Рейтинг</div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h3 className="font-semibold">Активные объявления</h3>
-                    <div className="space-y-2">
-                      {listings.slice(0, 3).map((listing) => (
-                        <div key={listing.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-background rounded overflow-hidden">
-                              <img src={listing.imageUrl} alt={listing.title} className="w-full h-full object-cover" />
-                            </div>
-                            <div>
-                              <div className="font-medium">{listing.title}</div>
-                              <div className="text-sm text-muted-foreground">{listing.price}</div>
-                            </div>
-                          </div>
-                          <Button variant="ghost" size="sm">
-                            <Icon name="MoreVertical" size={16} />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="reviews" className="space-y-6">
-            <div className="max-w-3xl mx-auto">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-2xl">Отзывы пользователей</CardTitle>
-                  <CardDescription>
-                    Что говорят другие о продавцах и покупателях
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {reviews.map((review) => (
-                    <div key={review.id} className="border-b last:border-0 pb-4 last:pb-0">
-                      <div className="flex items-start gap-4">
-                        <Avatar>
-                          <AvatarFallback>{review.author[0]}</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="font-semibold">{review.author}</div>
-                            <div className="flex items-center gap-1">
-                              {Array.from({ length: 5 }).map((_, i) => (
-                                <Icon
-                                  key={i}
-                                  name="Star"
-                                  size={14}
-                                  className={i < review.rating ? 'fill-accent text-accent' : 'text-muted'}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                          <p className="text-sm text-muted-foreground mb-1">{review.text}</p>
-                          <div className="text-xs text-muted-foreground">{review.date}</div>
+              {!isAuthenticated ? (
+                <Card>
+                  <CardContent className="p-12 text-center">
+                    <Icon name="User" size={48} className="mx-auto text-muted-foreground mb-4" />
+                    <p className="text-muted-foreground mb-4">Войдите чтобы видеть профиль</p>
+                    <Button onClick={() => {
+                      setAuthMode('login');
+                      setShowAuthDialog(true);
+                    }}>
+                      Войти
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-col md:flex-row items-center gap-4">
+                      <Avatar className="w-16 h-16 md:w-20 md:h-20">
+                        {currentUser?.avatar ? (
+                          <AvatarImage src={currentUser.avatar} />
+                        ) : (
+                          <AvatarFallback className="text-2xl">{currentUser?.username[0]}</AvatarFallback>
+                        )}
+                      </Avatar>
+                      <div className="flex-1 text-center md:text-left">
+                        <CardTitle className="text-xl md:text-2xl">{currentUser?.username}</CardTitle>
+                        <CardDescription>Участник с {new Date().toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}</CardDescription>
+                        <div className="flex flex-wrap items-center gap-2 mt-2 justify-center md:justify-start">
+                          {currentUser && currentUser.rating > 0 && (
+                            <Badge variant="secondary" className="flex items-center gap-1">
+                              <Icon name="Star" size={12} />
+                              {currentUser.rating.toFixed(1)}
+                            </Badge>
+                          )}
+                          {currentUser && currentUser.deals > 0 && (
+                            <Badge>Сделок: {currentUser.deals}</Badge>
+                          )}
                         </div>
                       </div>
+                      <Button onClick={() => {
+                        setProfileAvatar(currentUser?.avatar || '');
+                        setShowProfileSettings(true);
+                      }}>
+                        <Icon name="Settings" size={16} className="mr-2" />
+                        Настройки
+                      </Button>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="space-y-1">
+                        <div className="text-xl md:text-2xl font-bold text-primary">{listings.filter(l => l.seller === currentUser?.username).length}</div>
+                        <div className="text-xs md:text-sm text-muted-foreground">Объявлений</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-xl md:text-2xl font-bold text-primary">{userChats.length}</div>
+                        <div className="text-xs md:text-sm text-muted-foreground">Чатов</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-xl md:text-2xl font-bold text-primary">{currentUser?.deals || 0}</div>
+                        <div className="text-xs md:text-sm text-muted-foreground">Сделок</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </TabsContent>
         </Tabs>
       </main>
 
-      <footer className="border-t mt-16 py-8 bg-card">
+      <footer className="border-t mt-8 md:mt-16 py-6 md:py-8 bg-card">
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -519,7 +778,7 @@ const Index = () => {
               <span className="font-bold text-lg">RoTrade</span>
             </div>
             
-            <div className="flex gap-6 text-sm text-muted-foreground">
+            <div className="flex gap-4 md:gap-6 text-xs md:text-sm text-muted-foreground">
               <a href="#" className="hover:text-foreground transition-colors">О проекте</a>
               <a href="#" className="hover:text-foreground transition-colors">Правила</a>
               <a href="#" className="hover:text-foreground transition-colors">Поддержка</a>
@@ -529,9 +788,9 @@ const Index = () => {
           <div className="mt-6 pt-6 border-t text-center">
             <div className="flex items-center justify-center gap-2 text-destructive font-medium mb-2">
               <Icon name="AlertTriangle" size={18} />
-              <span>ВАЖНО</span>
+              <span className="text-sm md:text-base">ВАЖНО</span>
             </div>
-            <p className="text-sm text-muted-foreground max-w-2xl mx-auto">
+            <p className="text-xs md:text-sm text-muted-foreground max-w-2xl mx-auto">
               САЙТ НЕ РУЧАЕТСЯ ЗА СДЕЛКИ. Все транзакции происходят между пользователями напрямую. 
               Администрация платформы не несёт ответственности за качество товаров и честность сделок.
               Будьте внимательны и осторожны при проведении операций.
@@ -545,10 +804,10 @@ const Index = () => {
       </footer>
 
       <Dialog open={showAuthDialog} onOpenChange={setShowAuthDialog}>
-        <DialogContent>
+        <DialogContent className="w-[95vw] max-w-md">
           <DialogHeader>
             <DialogTitle>{authMode === 'login' ? 'Вход' : 'Регистрация'}</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-sm">
               {authMode === 'login' 
                 ? 'Введите данные для входа в систему' 
                 : 'Создайте аккаунт для размещения объявлений'}
@@ -593,9 +852,9 @@ const Index = () => {
               onClick={() => {
                 setAuthMode(authMode === 'login' ? 'register' : 'login');
               }}
-              className="w-full sm:w-auto"
+              className="w-full sm:w-auto text-sm"
             >
-              {authMode === 'login' ? 'Нет аккаунта? Регистрация' : 'Уже есть аккаунт? Войти'}
+              {authMode === 'login' ? 'Нет аккаунта?' : 'Уже есть аккаунт?'}
             </Button>
             <Button onClick={handleAuth} className="w-full sm:w-auto bg-primary">
               {authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}
@@ -605,38 +864,72 @@ const Index = () => {
       </Dialog>
 
       <Dialog open={showChat} onOpenChange={setShowChat}>
-        <DialogContent className="max-w-2xl h-[600px] flex flex-col p-0">
-          <DialogHeader className="p-6 pb-4 border-b">
-            <DialogTitle className="flex items-center gap-3">
-              <Avatar className="w-10 h-10">
-                <AvatarFallback>{selectedSeller[0]}</AvatarFallback>
-              </Avatar>
-              <div>
-                <div className="font-semibold">{selectedSeller}</div>
-                <div className="text-xs text-muted-foreground font-normal">В сети</div>
+        <DialogContent className="w-[95vw] max-w-2xl h-[85vh] md:h-[600px] flex flex-col p-0">
+          <DialogHeader className="p-4 md:p-6 pb-4 border-b">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Avatar className="w-10 h-10">
+                  {chats[activeChatId]?.participantAvatar ? (
+                    <AvatarImage src={chats[activeChatId].participantAvatar} />
+                  ) : (
+                    <AvatarFallback>{chats[activeChatId]?.participant[0]}</AvatarFallback>
+                  )}
+                </Avatar>
+                <div>
+                  <DialogTitle className="text-base md:text-lg">{chats[activeChatId]?.participant}</DialogTitle>
+                  <div className="text-xs text-muted-foreground font-normal">
+                    {chats[activeChatId]?.blocked ? 'Заблокирован' : 'В сети'}
+                  </div>
+                </div>
               </div>
-            </DialogTitle>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setReportTarget(chats[activeChatId]?.participant || '');
+                    setShowReportDialog(true);
+                  }}
+                >
+                  <Icon name="Flag" size={16} />
+                </Button>
+                <Button
+                  variant={chats[activeChatId]?.blocked ? "default" : "ghost"}
+                  size="sm"
+                  onClick={handleBlockChat}
+                >
+                  <Icon name={chats[activeChatId]?.blocked ? "Unlock" : "Ban"} size={16} />
+                </Button>
+              </div>
+            </div>
           </DialogHeader>
           
-          <ScrollArea className="flex-1 p-6">
+          <ScrollArea className="flex-1 p-4 md:p-6">
             <div className="space-y-4">
-              {messages.map((message) => (
+              {chats[activeChatId]?.messages.map((message) => (
                 <div
                   key={message.id}
-                  className={`flex gap-3 ${message.isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+                  className={`flex gap-2 md:gap-3 ${message.isOwn ? 'flex-row-reverse' : 'flex-row'}`}
                 >
-                  <Avatar className="w-8 h-8">
-                    <AvatarFallback>{message.sender[0]}</AvatarFallback>
+                  <Avatar className="w-7 h-7 md:w-8 md:h-8">
+                    <AvatarFallback className="text-xs">{message.sender[0]}</AvatarFallback>
                   </Avatar>
-                  <div className={`flex flex-col gap-1 max-w-[70%]`}>
+                  <div className={`flex flex-col gap-1 max-w-[75%] md:max-w-[70%]`}>
+                    {message.replyTo && (
+                      <div className="text-xs bg-muted/50 p-2 rounded border-l-2 border-primary">
+                        <div className="font-semibold">{message.replyTo.sender}</div>
+                        <div className="truncate">{message.replyTo.text}</div>
+                      </div>
+                    )}
                     <div
-                      className={`rounded-lg px-4 py-2 ${
+                      className={`rounded-lg px-3 py-2 md:px-4 md:py-2 cursor-pointer ${
                         message.isOwn
                           ? 'bg-primary text-primary-foreground'
                           : 'bg-muted'
                       }`}
+                      onClick={() => setReplyToMessage(message)}
                     >
-                      <p className="text-sm">{message.text}</p>
+                      <p className="text-sm break-words">{message.text}</p>
                     </div>
                     <span className="text-xs text-muted-foreground px-1">
                       {message.time}
@@ -647,7 +940,22 @@ const Index = () => {
             </div>
           </ScrollArea>
 
-          <div className="p-4 border-t">
+          <div className="p-3 md:p-4 border-t">
+            {replyToMessage && (
+              <div className="bg-muted p-2 rounded mb-2 flex items-center justify-between text-sm">
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-xs">{replyToMessage.sender}</div>
+                  <div className="truncate text-xs">{replyToMessage.text}</div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReplyToMessage(null)}
+                >
+                  <Icon name="X" size={14} />
+                </Button>
+              </div>
+            )}
             <div className="flex gap-2">
               <Input
                 placeholder="Напишите сообщение..."
@@ -659,9 +967,16 @@ const Index = () => {
                     handleSendMessage();
                   }
                 }}
+                disabled={chats[activeChatId]?.blocked}
+                className="text-sm"
               />
-              <Button onClick={handleSendMessage} className="bg-primary">
-                <Icon name="Send" size={18} />
+              <Button 
+                onClick={handleSendMessage} 
+                className="bg-primary"
+                size="sm"
+                disabled={chats[activeChatId]?.blocked}
+              >
+                <Icon name="Send" size={16} />
               </Button>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
@@ -670,6 +985,95 @@ const Index = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={showProfileSettings} onOpenChange={setShowProfileSettings}>
+        <DialogContent className="w-[95vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Настройки профиля</DialogTitle>
+            <DialogDescription className="text-sm">
+              Измените настройки вашего профиля
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="profile-avatar">Ссылка на аватар</Label>
+              <Input
+                id="profile-avatar"
+                placeholder="https://example.com/avatar.jpg"
+                value={profileAvatar}
+                onChange={(e) => setProfileAvatar(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Загрузите изображение на любой хостинг и вставьте ссылку
+              </p>
+            </div>
+            {profileAvatar && (
+              <div className="flex justify-center">
+                <Avatar className="w-20 h-20">
+                  <AvatarImage src={profileAvatar} />
+                  <AvatarFallback>{currentUser?.username[0]}</AvatarFallback>
+                </Avatar>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button onClick={handleUpdateProfile} className="w-full bg-primary">
+              Сохранить изменения
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReportDialog} onOpenChange={setShowReportDialog}>
+        <DialogContent className="w-[95vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Пожаловаться на пользователя</DialogTitle>
+            <DialogDescription className="text-sm">
+              Опишите причину жалобы. После 5 жалоб профиль будет заблокирован
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="report-reason">Причина жалобы</Label>
+              <Textarea
+                id="report-reason"
+                placeholder="Опишите нарушение..."
+                rows={4}
+                value={reportReason}
+                onChange={(e) => setReportReason(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReportDialog(false)}>
+              Отмена
+            </Button>
+            <Button onClick={handleReport} variant="destructive">
+              Отправить жалобу
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent className="w-[95vw] max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить объявление?</AlertDialogTitle>
+            <AlertDialogDescription className="text-sm">
+              Это действие нельзя отменить. Объявление будет удалено навсегда.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteListingId && handleDeleteListing(deleteListingId)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
