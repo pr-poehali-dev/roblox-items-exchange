@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,7 +16,6 @@ interface Listing {
   id: number;
   title: string;
   description: string;
-  price: string;
   imageUrl: string;
   seller: string;
   rating: number;
@@ -36,12 +35,25 @@ interface Message {
   text: string;
   time: string;
   isOwn: boolean;
+  replyTo?: Message;
+}
+
+interface Chat {
+  id: string;
+  participant: string;
+  lastMessage: string;
+  lastTime: string;
+  unread: number;
+  messages: Message[];
+  blocked: boolean;
 }
 
 interface User {
   username: string;
   rating: number;
   deals: number;
+  reports: number;
+  isBlocked: boolean;
 }
 
 const Index = () => {
